@@ -14,14 +14,6 @@
                 </mesh>
                 </geometry>
             </visual>
-            <collision name="border_collision">
-                <geometry>
-                    <mesh>
-                        <uri>model://aruco_id44_marker/meshes/id44.obj</uri>
-                        <scale>1.0 1.0 1.0</scale>
-                    </mesh>
-                </geometry>
-            </collision>
         </link>
 
         <joint name ="weld" type="fixed">
