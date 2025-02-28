@@ -4,6 +4,10 @@ import math
 import numpy as np
 import yaml
 from itertools import permutations
+import json
+import os
+
+RESULTS_FILE = "tsp_results.json"
 
 # ================= 2D 栅格地图 =================
 class OccupancyGrid2D:
@@ -93,6 +97,26 @@ def read_scenario(file_path):
         scenario = yaml.safe_load(file)
     return scenario
 
+# ================= 读取 JSON 结果 =================
+def load_tsp_results():
+    """加载 TSP 计算结果，若文件不存在或为空，则返回空字典"""
+    if not os.path.exists(RESULTS_FILE) or os.stat(RESULTS_FILE).st_size == 0:
+        print(f"⚠️ {RESULTS_FILE} 文件不存在或为空，初始化计算...")
+        return {}
+
+    try:
+        with open(RESULTS_FILE, 'r') as file:
+            return json.load(file)
+    except json.JSONDecodeError:
+        print(f"⚠️ {RESULTS_FILE} 解析失败，重置为空字典。")
+        return {}
+
+# ================= 存储 JSON 结果 =================
+def save_tsp_results(results):
+    """保存计算结果到 JSON 文件"""
+    with open(RESULTS_FILE, 'w') as file:
+        json.dump(results, file, indent=4)
+
 # ================= 测试代码 =================
 if __name__ == "__main__":
 
@@ -124,29 +148,38 @@ if __name__ == "__main__":
     for key in pose_keys:
         vp = scenario["viewpoint_poses"][key]
         targets.append((vp["x"], vp["y"], vp["z"]))
-    print(targets)
+        # 读取已有的TSP计算结果
+    tsp_results = load_tsp_results()
+
+    # 生成唯一的 scenario 键值
+    scenario_key = os.path.basename(args.scenario)
+
+    if scenario_key in tsp_results:
+        print(f"读取缓存结果: {scenario_key}")
+        order = tsp_results[scenario_key]["order"]
+        min_dist = tsp_results[scenario_key]["min_dist"]
+    else:
+        print(f"计算TSP路径: {scenario_key}")
+        order, min_dist = solve_tsp_bruteforce(targets)
+        tsp_results[scenario_key] = {"order": order, "min_dist": min_dist}
+        save_tsp_results(tsp_results)
     
     # 创建地图
-    occ_map = OccupancyGrid2D(x_size=10.0, y_size=10.0, resolution=0.5)
+    occ_map = OccupancyGrid2D(x_size=20.0, y_size=20.0, resolution=0.5,
+                        origin_x=-10.0,  origin_y=-10.0)
     if "obstacles" in scenario:
         for _, obs in scenario["obstacles"].items():
             occ_map.set_obstacle(obs["x"]-0.5*obs["d"], obs["x"]+0.5*obs["d"],
                                  obs["y"]-0.5*obs["h"], obs["y"]+0.5*obs["h"])
-    print("Occupancy map built.")
-    waypoints_2d = [(t[0], t[1]) for t in targets]
-    order, min_dist = solve_tsp_bruteforce(waypoints_2d)
     print("TSP Best Order:", order, "Min Distance:", min_dist)
-    # # 先运行 TSP
-    # waypoints = [(4.0, 6.0), (7.0, 2.0), (1.0, 1.0), (8.0, 8.0), (3.0, 5.0)]
-    #             #  (6.0, 1.5), (2.5, 7.5), (5.5, 4.5), (9.0, 3.0), (0.5, 9.0)]
-    # order, min_dist = solve_tsp_bruteforce(waypoints)
-    # print("TSP Best Order:", order, "Min Distance:", min_dist)
     
-    # # 逐个执行 A*
-    # start = (0.0, 0.0)
-    # for idx in order:
-    #     goal = waypoints[idx]
-    #     path = a_star_search(occ_map, start, goal)
-    #     print(f"A* Path to {goal}:", path)
-    #     if path is not None:
-    #         start = goal
+    # 逐个执行 A*
+    start = (0.0, 0.0)
+    for idx in order:
+        goal = targets[idx]
+        goal_xy = goal[:2]  # 只取 x, y
+        start_xy = start[:2]  # 只取 x, y
+        path = a_star_search(occ_map, start_xy, goal_xy)
+        print(f"A* Path to {goal}:", path)
+        if path is not None:
+            start = goal
