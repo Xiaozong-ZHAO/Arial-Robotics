@@ -40,6 +40,8 @@ from time import sleep
 from as2_python_api.drone_interface import DroneInterface
 import rclpy
 
+import numpy as np
+
 TAKE_OFF_HEIGHT = 1.0  # Height in meters
 TAKE_OFF_SPEED = 1.0  # Max speed in m/s
 SLEEP_TIME = 0.5  # Sleep time between behaviors in seconds

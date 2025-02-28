@@ -34,6 +34,12 @@ __authors__ = 'Rafael Perez-Segui'
 __copyright__ = 'Copyright (c) 2024 Universidad Politécnica de Madrid'
 __license__ = 'BSD-3-Clause'
 
+TAKE_OFF_HEIGHT = 1.0  # Height in meters
+TAKE_OFF_SPEED = 1.0  # Max speed in m/s
+SLEEP_TIME = 0.5  # Sleep time between behaviors in seconds
+SPEED = 1.0  # Max speed in m/s
+LAND_SPEED = 0.5  # Max speed in m/s
+
 import argparse
 from time import sleep
 import time
@@ -41,13 +47,6 @@ import yaml
 
 from as2_python_api.drone_interface import DroneInterface
 import rclpy
-
-TAKE_OFF_HEIGHT = 1.0  # Height in meters
-TAKE_OFF_SPEED = 1.0  # Max speed in m/s
-SLEEP_TIME = 0.5  # Sleep time between behaviors in seconds
-SPEED = 1.0  # Max speed in m/s
-LAND_SPEED = 0.5  # Max speed in m/s
-
 
 def drone_start(drone_interface: DroneInterface) -> bool:
     """
