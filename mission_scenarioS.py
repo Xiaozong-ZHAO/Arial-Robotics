@@ -10,7 +10,9 @@ import json
 from itertools import permutations
 from time import sleep
 import time
-
+from nav_msgs.msg import Path
+from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import Header
 # ------------------------- AeroStack2 Python API -------------------------
 import rclpy
 from as2_python_api.drone_interface import DroneInterface
@@ -140,6 +142,31 @@ def reconstruct_path_3d(parent, current, grid_map: OccupancyGrid3D):
         current = parent[current]
     return list(reversed(path))
 
+
+def generate_path_ros2(path_3d):
+    """
+    将 A* 生成的 3D 路径转换为 ROS2 Path 消息格式
+    :param path_3d: [(x, y, z), ...] A* 生成的路径点
+    :return: Path 消息
+    """
+    path_msg = Path()
+    
+    # 设置 header
+    path_msg.header = Header()
+    path_msg.header.stamp = rclpy.time.Time().to_msg()  # 设置时间戳
+    path_msg.header.frame_id = "map"  # 设定路径的参考坐标系
+    
+    # 遍历 A* 生成的路径点
+    for (px, py, pz) in path_3d:
+        pose = PoseStamped()
+        pose.header = path_msg.header  # 统一时间戳和坐标系
+        pose.pose.position.x = px
+        pose.pose.position.y = py
+        pose.pose.position.z = pz
+        path_msg.poses.append(pose)
+    
+    return path_msg
+
 # ------------------------- 3D TSP（穷举示例）-------------------------
 def solve_tsp_bruteforce_3d(waypoints_3d):
     """
@@ -262,13 +289,25 @@ def drone_run(drone_interface: DroneInterface, scenario: dict) -> bool:
             return False
 
         # 逐点移动到目标(或只移动到终点)
-        for (px, py, pz) in path_3d:
-            success = drone_interface.go_to.go_to_point_with_yaw(
-                [px, py, pz], angle=0.0, speed=SPEED)
-            if not success:
-                print("go_to failed!")
-                return False
-            # sleep(SLEEP_TIME)
+        # for (px, py, pz) in path_3d:
+        #     success = drone_interface.go_to.go_to_point_with_yaw(
+        #         [px, py, pz], angle=0.0, speed=SPEED, wait=False)
+        #     if not success:
+        #         print("go_to failed!")
+        #         return False
+        #     sleep(SLEEP_TIME)
+        
+        path_ros2 = generate_path_ros2(path_3d)  # 生成 Path 消息 (nav_msgs/Path)
+        # 调用 follow_path_with_keep_yaw (或其他follow_path_*函数) 来执行
+        success = drone_interface.follow_path.follow_path_with_yaw(
+            path=path_ros2,
+            speed=SPEED,       # 飞行速度
+            angle=0.0,         # 
+            frame_id='earth'     # 根据实际坐标系改成 "earth" 或 "odom" 等
+        )
+        if not success:
+            print("follow_path failed!")
+            return False
 
         # 若有需要，给出最终 yaw (场景中 viewpoint_poses[key]["w"])
         final_angle = scenario["viewpoint_poses"][pose_keys[idx]].get("w", 0.0)
