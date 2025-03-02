@@ -90,7 +90,7 @@ def a_star_search_3d(grid_map: OccupancyGrid3D, start_xyz, goal_xyz):
     sx, sy, sz = start_xyz
     gx, gy, gz = goal_xyz
     start_ix, start_iy, start_iz = grid_map.world_to_map(sx, sy, sz)
-    goal_ix,  goal_iy,  goal_iz  = grid_map.world_to_map(gx, gy, gz)
+    goal_ix, goal_iy, goal_iz = grid_map.world_to_map(gx, gy, gz)
 
     # 基础检查
     if not grid_map.in_bounds(start_ix, start_iy, start_iz):
@@ -103,37 +103,35 @@ def a_star_search_3d(grid_map: OccupancyGrid3D, start_xyz, goal_xyz):
         print("Start or Goal in obstacle!")
         return None
 
-    open_list = []
-    heapq.heappush(open_list, (0, (start_ix, start_iy, start_iz)))
-    g_cost = {(start_ix, start_iy, start_iz): 0.0}
-    parent = {(start_ix, start_iy, start_iz): None}
+    # 构建 NetworkX 图，使用 NumPy 向量化处理
+    G = nx.Graph()
+    free_voxels = np.argwhere(grid_map.grid == 0)  # 获取所有自由空间的索引 (z, y, x)
+    node_positions = {tuple(voxel[::-1]): voxel for voxel in free_voxels}  # 变换为 (x, y, z)
+    
+    # 生成所有可能的邻接点（6邻接）
+    offsets = np.array([[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]])
+    neighbor_positions = free_voxels[:, None, :] + offsets  # 计算所有邻接点
+    neighbor_positions = neighbor_positions.reshape(-1, 3)  # 扁平化
 
-    # 6邻接(上下前后左右)，也可扩展为26邻接
-    directions = [(1,0,0), (-1,0,0), (0,1,0), (0,-1,0), (0,0,1), (0,0,-1)]
+    # 过滤合法的邻接点（确保仍然在自由空间中）
+    valid_neighbors = [tuple(voxel[::-1]) for voxel in neighbor_positions if tuple(voxel[::-1]) in node_positions]
+    
+    # 添加节点
+    G.add_nodes_from(node_positions.keys())
+    
+    # 添加边
+    for voxel, neighbors in zip(node_positions.keys(), valid_neighbors):
+        G.add_edge(voxel, neighbors, weight=1.0)
 
-    while open_list:
-        f, current = heapq.heappop(open_list)
-        if current == (goal_ix, goal_iy, goal_iz):
-            return reconstruct_path_3d(parent, current, grid_map)
+    # 运行 A* 寻找最短路径
+    try:
+        path = nx.astar_path(G, (start_ix, start_iy, start_iz), (goal_ix, goal_iy, goal_iz), heuristic=lambda a, b: np.linalg.norm(np.array(b) - np.array(a)))
+    except nx.NetworkXNoPath:
+        print("A* 3D failed: no path found!")
+        return None
 
-        cx, cy, cz = current
-        for dx, dy, dz in directions:
-            nx, ny, nz = cx + dx, cy + dy, cz + dz
-            if not grid_map.in_bounds(nx, ny, nz):
-                continue
-            if grid_map.grid[nz, ny, nx] == 1:
-                continue
-
-            cost_new = g_cost[current] + 1.0
-            if (nx, ny, nz) not in g_cost or cost_new < g_cost[(nx, ny, nz)]:
-                g_cost[(nx, ny, nz)] = cost_new
-                # 欧几里得距离做启发
-                h = math.sqrt((goal_ix - nx)**2 + (goal_iy - ny)**2 + (goal_iz - nz)**2)
-                f_new = cost_new + h
-                parent[(nx, ny, nz)] = current
-                heapq.heappush(open_list, (f_new, (nx, ny, nz)))
-    print("A* 3D failed: no path found!")
-    return None
+    # 还原路径坐标
+    return [grid_map.map_to_world(x, y, z) for x, y, z in path]
 
 def reconstruct_path_3d(parent, current, grid_map: OccupancyGrid3D):
     path = []
@@ -331,6 +329,7 @@ def drone_run(drone_interface: DroneInterface, scenario: dict) -> bool:
         goal_xyz = targets_3d[idx]
         print(f"Planning path from {current_pose} to {goal_xyz}")
         path_3d = a_star_search_3d(grid_map_3d, current_pose, goal_xyz)
+        print(f"Generated 3D path: {path_3d}")
         if path_3d is None:
             print("A* 3D path not found, mission aborted.")
             return False
@@ -386,13 +385,13 @@ if __name__ == "__main__":
     parser.add_argument('-s', '--use_sim_time', action='store_true', default=True, help='Use simulation time')
     args = parser.parse_args()
     # ------------------------- Test Dubins -------------------------
-    start = (0, 0, 0, np.deg2rad(0))
-    goal = (10, 10, 5, np.deg2rad(45))
-    dubins3d = Dubins3D()
-    path_x, path_y, path_z = dubins3d.generate_path(start, goal)
-    print(f"Dubins Path x: {path_x}")
-    print(f"Dubins Path y: {path_y}")
-    print(f"Dubins Path z: {path_z}")
+    # start = (0, 0, 0, np.deg2rad(0))
+    # goal = (10, 10, 5, np.deg2rad(45))
+    # dubins3d = Dubins3D()
+    # path_x, path_y, path_z = dubins3d.generate_path(start, goal)
+    # print(f"Dubins Path x: {path_x}")
+    # print(f"Dubins Path y: {path_y}")
+    # print(f"Dubins Path z: {path_z}")
     # ------------------------- Test Dubins -------------------------
     # 读取场景
     scenario_file = args.scenario
