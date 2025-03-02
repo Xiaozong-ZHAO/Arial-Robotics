@@ -7,6 +7,8 @@ import numpy as np
 import yaml
 import os
 import json
+import networkx as nx
+
 from itertools import permutations
 from time import sleep
 import time
@@ -142,6 +144,51 @@ def reconstruct_path_3d(parent, current, grid_map: OccupancyGrid3D):
         current = parent[current]
     return list(reversed(path))
 
+# ------------------------- Dubins Path -------------------------
+class Dubins3D:
+    def __init__(self, min_turn_radius=1.0, num_points=100):
+        self.min_turn_radius = min_turn_radius  # 最小转弯半径
+        self.num_points = num_points  # 采样点数量
+
+    def generate_arc(self, start, center, radius, angle_start, angle_end):
+        """ 生成 2D 圆弧路径 """
+        angles = np.linspace(angle_start, angle_end, self.num_points)
+        x = center[0] + radius * np.cos(angles)
+        y = center[1] + radius * np.sin(angles)
+        return x, y
+
+    def generate_path(self, start, goal):
+        """
+        计算 3D Dubins Path
+        :param start: (x, y, z, yaw)
+        :param goal: (x, y, z, yaw)
+        :return: (path_x, path_y, path_z)
+        """
+        x0, y0, z0, yaw0 = start
+        x1, y1, z1, yaw1 = goal
+
+        # 计算转弯中心
+        center_left = (x0 + self.min_turn_radius * np.cos(yaw0 + np.pi / 2),
+                       y0 + self.min_turn_radius * np.sin(yaw0 + np.pi / 2))
+        center_right = (x0 + self.min_turn_radius * np.cos(yaw0 - np.pi / 2),
+                        y0 + self.min_turn_radius * np.sin(yaw0 - np.pi / 2))
+        
+        # 选择最优转弯方向
+        if np.linalg.norm([center_left[0] - x1, center_left[1] - y1]) < np.linalg.norm([center_right[0] - x1, center_right[1] - y1]):
+            center = center_left
+            angle_start, angle_end = yaw0, np.arctan2(y1 - center[1], x1 - center[0])
+        else:
+            center = center_right
+            angle_start, angle_end = yaw0, np.arctan2(y1 - center[1], x1 - center[0])
+
+        # 生成 2D Dubins 路径
+        path_x, path_y = self.generate_arc(start, center, self.min_turn_radius, angle_start, angle_end)
+        
+        # 计算 Z 轴插值
+        t_values = np.linspace(0, 1, len(path_x))
+        path_z = z0 + t_values * (z1 - z0)
+        
+        return path_x, path_y, path_z
 
 def generate_path_ros2(path_3d):
     """
@@ -287,15 +334,6 @@ def drone_run(drone_interface: DroneInterface, scenario: dict) -> bool:
         if path_3d is None:
             print("A* 3D path not found, mission aborted.")
             return False
-
-        # 逐点移动到目标(或只移动到终点)
-        # for (px, py, pz) in path_3d:
-        #     success = drone_interface.go_to.go_to_point_with_yaw(
-        #         [px, py, pz], angle=0.0, speed=SPEED, wait=False)
-        #     if not success:
-        #         print("go_to failed!")
-        #         return False
-        #     sleep(SLEEP_TIME)
         
         path_ros2 = generate_path_ros2(path_3d)  # 生成 Path 消息 (nav_msgs/Path)
         # 调用 follow_path_with_keep_yaw (或其他follow_path_*函数) 来执行
@@ -347,7 +385,15 @@ if __name__ == "__main__":
     parser.add_argument('-v', '--verbose', action='store_true', default=False, help='Enable verbose output')
     parser.add_argument('-s', '--use_sim_time', action='store_true', default=True, help='Use simulation time')
     args = parser.parse_args()
-
+    # ------------------------- Test Dubins -------------------------
+    start = (0, 0, 0, np.deg2rad(0))
+    goal = (10, 10, 5, np.deg2rad(45))
+    dubins3d = Dubins3D()
+    path_x, path_y, path_z = dubins3d.generate_path(start, goal)
+    print(f"Dubins Path x: {path_x}")
+    print(f"Dubins Path y: {path_y}")
+    print(f"Dubins Path z: {path_z}")
+    # ------------------------- Test Dubins -------------------------
     # 读取场景
     scenario_file = args.scenario
     scenario = read_scenario(scenario_file)
