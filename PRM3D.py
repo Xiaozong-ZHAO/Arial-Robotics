@@ -8,6 +8,7 @@ import yaml
 class PRM3DPlanner:
     def __init__(self, 
                  viewpoints,       # list of (x,y,z) 必经航点
+                 orientations,     # list of w, 朝向
                  num_samples,      # 随机采样数
                  obstacles, 
                  bounding_box, 
@@ -21,6 +22,7 @@ class PRM3DPlanner:
         :param k: k近邻
         """
         self.viewpoints = viewpoints
+        self.orientations = orientations
         self.num_samples = num_samples
         self.obstacles = obstacles
         self.bounding_box = bounding_box
@@ -273,11 +275,13 @@ if __name__ == "__main__":
     
     # 假设 viewpoint_poses 是 dict: {id: {x,y,z,...}, ...}
     viewpoint_list = []
+    orientation_list = []
     if "viewpoint_poses" in scenario:
         vp_keys = sorted(list(scenario["viewpoint_poses"].keys()), key=int)
         for k in vp_keys:
             vp = scenario["viewpoint_poses"][k]
             viewpoint_list.append((vp["x"], vp["y"], vp["z"]))
+            orientation_list.append(vp["w"])
     else:
         viewpoint_list = []
 
@@ -287,6 +291,7 @@ if __name__ == "__main__":
     # 初始化PRM, 采样200个随机节点
     planner = PRM3DPlanner(
         viewpoints=viewpoint_list,
+        orientations=orientation_list,
         num_samples=200,
         obstacles=obstacles,
         bounding_box=bounding_box,
@@ -294,6 +299,7 @@ if __name__ == "__main__":
     )
     print("PRM Graph built with nodes:", len(planner.G.nodes))
     print("PRM Graph built with edges:", len(planner.G.edges))
+    print("viewpoints orientation are", planner.orientations)
 
     # 举例：规划从(0,0,1) ->(8,8,3)
     start_xyz = (0,0,1)

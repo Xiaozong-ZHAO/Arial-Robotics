@@ -259,6 +259,46 @@ def drone_start(drone_interface: DroneInterface) -> bool:
     success = drone_interface.takeoff(height=TAKE_OFF_HEIGHT, speed=TAKE_OFF_SPEED)
     print(f"Take Off success: {success}")
     return success
+#----------------------------new drone_run--------------------------------
+def drone_run2(drone_interface: DroneInterface, planner: PRM3DPlanner) -> bool:
+    """
+    将 3D TSP + 3D A* 与无人机飞行控制结合，支持 JSON 缓存TSP结果
+    """
+    print("Run mission")
+    # load the viewpoint list
+    viewpoint_list = planner.viewpoints
+    # calculate the TSP
+    print("Calculating TSP...")
+    # order, min_dist = solve_tsp_bruteforce_3d(viewpoint_list)
+    order = (6, 4, 2, 7, 3, 9, 5, 1, 0, 8)
+    min_dist = 53.451108678324196
+    print(f"TSP order={order}, dist={min_dist:.2f}")
+    current_pose = (0.0, 0.0, TAKE_OFF_HEIGHT)
+    # path planning for each viewpoint
+    for idx in order:
+        target_pose = viewpoint_list[idx]
+        print(f"the {idx} viewpoint is {target_pose}")
+        print(f"Planning path from {current_pose} to {target_pose}")
+        path_3d = planner.plan_path(current_pose, target_pose)
+        if path_3d is None:
+            print("A* 3D path not found, mission aborted.")
+            return False
+        # convert the path into ros2 path message
+        print("path3D", path_3d)
+        path_ros2 = generate_path_ros2(path_3d)
+        final_angle = planner.orientations[idx]
+        success = drone_interface.follow_path.follow_path_with_yaw(
+            path=path_ros2,
+            speed=SPEED,
+            angle=final_angle,
+            frame_id='earth'
+        )
+        if not success:
+            print("follow_path failed!")
+            return False
+        current_pose = target_pose
+        # print(f"Reached viewpoint {target_pose[idx]}")
+    return True
 
 def drone_run(drone_interface: DroneInterface, scenario: dict) -> bool:
     """
@@ -330,6 +370,7 @@ def drone_run(drone_interface: DroneInterface, scenario: dict) -> bool:
         goal_xyz = targets_3d[idx]
         print(f"Planning path from {current_pose} to {goal_xyz}")
         path_3d = a_star_search_3d(grid_map_3d, current_pose, goal_xyz)
+        print(f"Path length: {path_3d}")
         if path_3d is None:
             print("A* 3D path not found, mission aborted.")
             return False
@@ -402,11 +443,13 @@ if __name__ == "__main__":
     rclpy.init()
 
     viewpoint_list = []
+    orientation_list = []
     if "viewpoint_poses" in scenario:
         vp_keys = sorted(list(scenario["viewpoint_poses"].keys()), key=int)
         for k in vp_keys:
             vp = scenario["viewpoint_poses"][k]
             viewpoint_list.append((vp["x"], vp["y"], vp["z"]))
+            orientation_list.append(vp["w"])
     else:
         viewpoint_list = []
 
@@ -415,6 +458,7 @@ if __name__ == "__main__":
 
     planner = PRM3DPlanner(
         viewpoints=viewpoint_list,
+        orientations=orientation_list,
         num_samples=200,
         obstacles=obstacles,
         bounding_box=bounding_box,
@@ -435,7 +479,7 @@ if __name__ == "__main__":
     try:
         start_time = time.time()
         if success:
-            success = drone_run(uav, scenario)
+            success = drone_run2(uav, planner)
         duration = time.time() - start_time
         print("---------------------------------")
         print(f"Mission for {scenario_file} took {duration:.2f} seconds")
