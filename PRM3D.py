@@ -267,7 +267,7 @@ class PRM3DPlanner:
 
 # =========== 小demo: how to use =========== 
 if __name__ == "__main__":
-    scenario_file = "scenarios/scenario4.yaml"  # 你自定义
+    scenario_file = "scenarios/scenario1.yaml"  # 你自定义
     with open(scenario_file,"r") as f:
         scenario = yaml.safe_load(f)
     
@@ -281,7 +281,7 @@ if __name__ == "__main__":
     else:
         viewpoint_list = []
 
-    bounding_box = ((-10, -10, 0), (10, 10, 6))
+    bounding_box = ((-10, -10, 0), (10, 10, 10))
     obstacles = scenario.get("obstacles", {})
 
     # 初始化PRM, 采样200个随机节点

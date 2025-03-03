@@ -15,6 +15,7 @@ import time
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Header
+from PRM3D import PRM3DPlanner
 # ------------------------- AeroStack2 Python API -------------------------
 import rclpy
 from as2_python_api.drone_interface import DroneInterface
@@ -329,7 +330,6 @@ def drone_run(drone_interface: DroneInterface, scenario: dict) -> bool:
         goal_xyz = targets_3d[idx]
         print(f"Planning path from {current_pose} to {goal_xyz}")
         path_3d = a_star_search_3d(grid_map_3d, current_pose, goal_xyz)
-        print(f"Generated 3D path: {path_3d}")
         if path_3d is None:
             print("A* 3D path not found, mission aborted.")
             return False
@@ -398,9 +398,30 @@ if __name__ == "__main__":
     scenario = read_scenario(scenario_file)
     # 把文件路径存入 scenario 以便做 scenario_key
     scenario["file_path"] = scenario_file  
-
     print(f"Running 3D mission for drone {args.namespace}")
     rclpy.init()
+
+    viewpoint_list = []
+    if "viewpoint_poses" in scenario:
+        vp_keys = sorted(list(scenario["viewpoint_poses"].keys()), key=int)
+        for k in vp_keys:
+            vp = scenario["viewpoint_poses"][k]
+            viewpoint_list.append((vp["x"], vp["y"], vp["z"]))
+    else:
+        viewpoint_list = []
+
+    bounding_box = ((-10, -10, 0), (10, 10, 6))
+    obstacles = scenario.get("obstacles", {})
+
+    planner = PRM3DPlanner(
+        viewpoints=viewpoint_list,
+        num_samples=200,
+        obstacles=obstacles,
+        bounding_box=bounding_box,
+        k=10
+    )
+    print("PRM Graph built with nodes:", len(planner.G.nodes))
+    print("PRM Graph built with edges:", len(planner.G.edges))
 
     # 启动无人机接口
     uav = DroneInterface(
