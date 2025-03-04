@@ -4,6 +4,9 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import yaml
+import numpy as np
+# from vispy import scene
+# from vispy.scene import visuals
 
 class PRM3DPlanner:
     def __init__(self, 
@@ -44,28 +47,38 @@ class PRM3DPlanner:
         """
         for _, obs in self.obstacles.items():
             cx, cy, cz = obs["x"], obs["y"], obs["z"]
-            dx, dy, dz = obs["d"], obs["h"], obs["w"]
-            box_min = (cx - dx/2, cy - dy/2, cz - dz/2)
-            box_max = (cx + dx/2, cy + dy/2, cz + dz/2)
+            dx, dy, dz = obs["w"], obs["d"], obs["h"]
+            box_min = (cx - dx/2 - 0.15, cy - dy/2 - 0.15, cz - dz/2 - 0.15)
+            box_max = (cx + dx/2 + 0.15, cy + dy/2 + 0.15, cz + dz/2 + 0.15)
             if self.is_point_in_box(pt, box_min, box_max):
                 return True
         return False
-    
+
     def check_segment_box_intersect(self, p1, p2, box_min, box_max):
         """
-        判断线段 p1->p2 是否与盒子(AABB)相交
+        判断线段 p1->p2 是否与对齐坐标轴(AABB) [box_min, box_max] 相交.
+        p1, p2: (x, y, z)
+        box_min, box_max: (xmin, ymin, zmin), (xmax, ymax, zmax)
+        返回 True 表示线段与盒子有交(或端点在盒内), False 表示无交.
         """
-        # 如果起点或终点在盒子内,就算相交
-        if self.is_point_in_box(p1, box_min, box_max):
+
+        # 1) 若线段任一端点在盒子内 => 直接返回 True
+        if (box_min[0] <= p1[0] <= box_max[0] and
+            box_min[1] <= p1[1] <= box_max[1] and
+            box_min[2] <= p1[2] <= box_max[2]):
             return True
-        if self.is_point_in_box(p2, box_min, box_max):
+        if (box_min[0] <= p2[0] <= box_max[0] and
+            box_min[1] <= p2[1] <= box_max[1] and
+            box_min[2] <= p2[2] <= box_max[2]):
             return True
-        
-        # 用 parametric t in [0,1] 测试
-        seg_dir = (p2[0]-p1[0], p2[1]-p1[1], p2[2]-p1[2])
+
+        # 2) 用 parametric form: p(t)=p1 + t*(p2 - p1), t in [0,1] 
+        seg_dir = (p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2])
         tmin, tmax = 0.0, 1.0
+
         for i in range(3):
             if abs(seg_dir[i]) < 1e-9:
+                # 若该方向上没有移动,且p1在盒外,则无法相交
                 if p1[i] < box_min[i] or p1[i] > box_max[i]:
                     return False
             else:
@@ -74,10 +87,22 @@ class PRM3DPlanner:
                 t2 = (box_max[i] - p1[i]) * inv_d
                 if t1 > t2:
                     t1, t2 = t2, t1
-                tmin = max(tmin, t1)
-                tmax = min(tmax, t2)
+
+                # 收缩 [tmin, tmax] 区间
+                if t1 > tmin:
+                    tmin = t1
+                if t2 < tmax:
+                    tmax = t2
+
+                # 区间反转 => 无法相交
                 if tmax < tmin:
                     return False
+
+        # 3) 若 tmax < 0 或 tmin > 1 => 线段本体没有与盒子重叠
+        if tmax < 0 or tmin > 1:
+            return False
+
+        # 只要能到这,说明在 [0,1] 上有重叠 => 有相交
         return True
     
     def collision_free_edge(self, p1, p2):
@@ -86,9 +111,9 @@ class PRM3DPlanner:
         """
         for _, obs in self.obstacles.items():
             cx, cy, cz = obs["x"], obs["y"], obs["z"]
-            dx, dy, dz = obs["d"], obs["h"], obs["w"]
-            box_min = (cx - dx/2, cy - dy/2, cz - dz/2)
-            box_max = (cx + dx/2, cy + dy/2, cz + dz/2)
+            dx, dy, dz = obs["w"], obs["d"], obs["h"]
+            box_min = (cx - dx/2 - 0.15, cy - dy/2 - 0.15, cz - dz/2 - 0.15)
+            box_max = (cx + dx/2 + 0.15, cy + dy/2 + 0.15, cz + dz/2 + 0.15)
             if self.check_segment_box_intersect(p1, p2, box_min, box_max):
                 return False
         return True
@@ -246,10 +271,10 @@ class PRM3DPlanner:
         在Axes3D上画一个 axis-aligned box (中心(cx,cy,cz), 尺寸(dx,dy,dz)).
         """
         cx, cy, cz = obs['x'], obs['y'], obs['z']
-        dx, dy, dz = obs['d'], obs['h'], obs['w']
-        x1, x2 = cx - dx/2, cx + dx/2
-        y1, y2 = cy - dy/2, cy + dy/2
-        z1, z2 = cz - dz/2, cz + dz/2
+        dx, dy, dz = obs["w"], obs["d"], obs["h"]
+        x1, x2 = cx - dx/2 - 0.15, cx + dx/2 + 0.15
+        y1, y2 = cy - dy/2 - 0.15, cy + dy/2 + 0.15
+        z1, z2 = cz - dz/2 - 0.15, cz + dz/2 + 0.15
         
         corners = [
             (x1,y1,z1), (x1,y1,z2), (x1,y2,z1), (x1,y2,z2),
@@ -266,10 +291,9 @@ class PRM3DPlanner:
             (x_j,y_j,z_j) = corners[j]
             ax.plot([x_i,x_j], [y_i,y_j], [z_i,z_j], linestyle='--', color='g', linewidth=1)
 
-
 # =========== 小demo: how to use =========== 
 if __name__ == "__main__":
-    scenario_file = "scenarios/scenario1.yaml"  # 你自定义
+    scenario_file = "scenarios/scenario4.yaml"  # 你自定义
     with open(scenario_file,"r") as f:
         scenario = yaml.safe_load(f)
     
