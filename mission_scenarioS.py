@@ -16,12 +16,35 @@ from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Header
 from PRM3D import PRM3DPlanner
+from python_tsp.exact import solve_tsp_dynamic_programming
 # ------------------------- AeroStack2 Python API -------------------------
 import rclpy
 from as2_python_api.drone_interface import DroneInterface
-
 # ------------------------- TSP 缓存结果文件 -------------------------
 RESULTS_FILE = "tsp_results.json"
+
+
+def solve_tsp(waypoints_3d):
+    """
+    waypoints_3d: [(x, y, z), ...]
+    返回 (best_order, best_dist)
+    """
+    n = len(waypoints_3d)
+    # 构造距离矩阵
+    dist_matrix = np.zeros((n, n))
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                dist_matrix[i, j] = 0.0
+            else:
+                x1, y1, z1 = waypoints_3d[i]
+                x2, y2, z2 = waypoints_3d[j]
+                dist_matrix[i, j] = math.sqrt((x2 - x1)**2 + (y2 - y1)**2 + (z2 - z1)**2)
+    
+    # 使用 python_tsp 提供的动态规划方法求解
+    best_order, best_dist = solve_tsp_dynamic_programming(dist_matrix)
+    
+    return tuple(best_order), best_dist
 
 def load_tsp_results():
     """加载 TSP 计算结果，若文件不存在或为空，则返回空字典"""
@@ -214,23 +237,23 @@ def generate_path_ros2(path_3d):
     return path_msg
 
 # ------------------------- 3D TSP（穷举示例）-------------------------
-def solve_tsp_bruteforce_3d(waypoints_3d):
-    """
-    waypoints_3d: [(x, y, z), ...]
-    返回 (best_order, best_dist)
-    """
-    n = len(waypoints_3d)
-    best_order, best_dist = None, float('inf')
-    for perm in permutations(range(n)):
-        dist_sum = 0.0
-        for i in range(n - 1):
-            x1, y1, z1 = waypoints_3d[perm[i]]
-            x2, y2, z2 = waypoints_3d[perm[i+1]]
-            dist_sum += math.sqrt((x2 - x1)**2 + (y2 - y1)**2 + (z2 - z1)**2)
-        if dist_sum < best_dist:
-            best_dist = dist_sum
-            best_order = perm
-    return best_order, best_dist
+# def solve_tsp_bruteforce_3d(waypoints_3d):
+#     """
+#     waypoints_3d: [(x, y, z), ...]
+#     返回 (best_order, best_dist)
+#     """
+#     n = len(waypoints_3d)
+#     best_order, best_dist = None, float('inf')
+#     for perm in permutations(range(n)):
+#         dist_sum = 0.0
+#         for i in range(n - 1):
+#             x1, y1, z1 = waypoints_3d[perm[i]]
+#             x2, y2, z2 = waypoints_3d[perm[i+1]]
+#             dist_sum += math.sqrt((x2 - x1)**2 + (y2 - y1)**2 + (z2 - z1)**2)
+#         if dist_sum < best_dist:
+#             best_dist = dist_sum
+#             best_order = perm
+#     return best_order, best_dist
 
 # ------------------------- 读取场景文件 -------------------------
 def read_scenario(file_path):
@@ -240,9 +263,9 @@ def read_scenario(file_path):
 
 # ------------------------- 基础无人机任务 start/run/end -------------------------
 TAKE_OFF_HEIGHT = 1.0
-TAKE_OFF_SPEED  = 1.0
+TAKE_OFF_SPEED  = 2.0
 SLEEP_TIME      = 0.5
-SPEED           = 1.0
+SPEED           = 2.0
 LAND_SPEED      = 0.5
 
 def drone_start(drone_interface: DroneInterface) -> bool:
@@ -270,21 +293,19 @@ def drone_run2(drone_interface: DroneInterface, planner: PRM3DPlanner) -> bool:
     # calculate the TSP
     print("Calculating TSP...")
     # order, min_dist = solve_tsp_bruteforce_3d(viewpoint_list)
-    order = (6, 4, 2, 7, 3, 9, 5, 1, 0, 8)
-    min_dist = 53.451108678324196
+    order, min_dist = solve_tsp(viewpoint_list)
+    # order = (6, 4, 2, 7, 3, 9, 5, 1, 0, 8)
+    # min_dist = 53.451108678324196
     print(f"TSP order={order}, dist={min_dist:.2f}")
     current_pose = (0.0, 0.0, TAKE_OFF_HEIGHT)
     # path planning for each viewpoint
     for idx in order:
         target_pose = viewpoint_list[idx]
-        print(f"the {idx} viewpoint is {target_pose}")
-        print(f"Planning path from {current_pose} to {target_pose}")
         path_3d = planner.plan_path(current_pose, target_pose)
         if path_3d is None:
             print("A* 3D path not found, mission aborted.")
             return False
         # convert the path into ros2 path message
-        print("path3D", path_3d)
         path_ros2 = generate_path_ros2(path_3d)
         final_angle = planner.orientations[idx]
         success = drone_interface.follow_path.follow_path_with_yaw(
