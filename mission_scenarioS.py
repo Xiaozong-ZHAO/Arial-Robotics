@@ -248,7 +248,7 @@ def main():
         print(f"Mission took {total_dur:.2f} seconds")
     except KeyboardInterrupt:
         success = False
-
+    
     success2 = drone_end(uav)
     uav.shutdown()
     rclpy.shutdown()
