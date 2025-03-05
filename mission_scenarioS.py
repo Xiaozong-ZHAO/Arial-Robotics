@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
-
-import argparse
 import math
 import time
+import argparse
+import threading
+
 import yaml
 import numpy as np
+import rclpy
+from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Header
 
 # AeroStack2 Python API
-import rclpy
 from as2_python_api.drone_interface import DroneInterface
 
-# python_tsp
+# python-tsp
 from python_tsp.exact import solve_tsp_dynamic_programming
 from python_tsp.heuristics import solve_tsp_local_search
 
@@ -21,21 +26,57 @@ from python_tsp.heuristics import solve_tsp_local_search
 from PRM3D import PRM3DPlanner
 
 # ================== 常量 & 配置 ==================
-
 TAKE_OFF_HEIGHT = 1.0
 TAKE_OFF_SPEED  = 2.0
 SPEED           = 2.0
 LAND_SPEED      = 0.5
-SLEEP_TIME      = 0.5
+
+# ================== 距离记录节点 ==================
+class DistanceLogger(Node):
+    """
+    订阅 /drone0/ground_truth/pose (PoseStamped)
+    连续计算无人机飞行距离
+    """
+    def __init__(self, drone_namespace="drone0"):
+        super().__init__("distance_logger")
+        self.prev_pos = None
+        self.total_distance = 0.0
+
+        topic_name = f"/{drone_namespace}/ground_truth/pose"
+
+        # 配合发布端BEST_EFFORT QoS（可据实际情况更改）
+        qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
+        )
+
+        self.subscription = self.create_subscription(
+            PoseStamped,
+            topic_name,
+            self.pose_callback,
+            qos_profile
+        )
+        self.get_logger().info(f"DistanceLogger subscribed to: {topic_name}")
+
+    def pose_callback(self, msg):
+        x = msg.pose.position.x
+        y = msg.pose.position.y
+        z = msg.pose.position.z
+
+        if self.prev_pos is not None:
+            dist = math.dist((x, y, z), self.prev_pos)
+            self.total_distance += dist
+
+        self.prev_pos = (x, y, z)
+
+    def get_distance(self) -> float:
+        """返回当前累计飞行距离"""
+        return self.total_distance
 
 
 # ================== TSP 求解函数 ==================
 def solve_tsp_dp(waypoints_3d):
-    """
-    使用 python-tsp exact动态规划 算法求解
-    waypoints_3d: [(x, y, z), ...]
-    返回: (best_order, best_dist)
-    """
     n = len(waypoints_3d)
     dist_matrix = np.zeros((n, n))
     for i in range(n):
@@ -45,21 +86,14 @@ def solve_tsp_dp(waypoints_3d):
             else:
                 x1, y1, z1 = waypoints_3d[i]
                 x2, y2, z2 = waypoints_3d[j]
-                dist_matrix[i,j] = math.dist((x1,y1,z1), (x2,y2,z2))
-
+                dist_matrix[i, j] = math.dist((x1, y1, z1), (x2, y2, z2))
     best_order, best_dist = solve_tsp_dynamic_programming(dist_matrix)
     return tuple(best_order), best_dist
 
 def solve_tsp_ls(waypoints_3d):
-    """
-    使用 python-tsp heuristics 局部搜索 算法求解
-    waypoints_3d: [(x, y, z), ...]
-    返回: (best_order, best_dist)
-    """
     coords = np.array(waypoints_3d)
-    n = len(coords)
     diff = coords[:, None, :] - coords[None, :, :]
-    dist_matrix = np.sqrt(np.sum(diff**2, axis=-1))
+    dist_matrix = np.sqrt(np.sum(diff ** 2, axis=-1))
     best_order, best_dist = solve_tsp_local_search(dist_matrix)
     return tuple(best_order), best_dist
 
@@ -89,6 +123,7 @@ def generate_path_ros2(path_3d):
         path_msg.poses.append(pose)
     return path_msg
 
+
 # ================== 无人机控制流程 ==================
 def drone_start(drone_interface: DroneInterface) -> bool:
     print("=== Start mission ===")
@@ -96,13 +131,15 @@ def drone_start(drone_interface: DroneInterface) -> bool:
     print("Arming...")
     success = drone_interface.arm()
     print(f"Arm success: {success}")
-    if not success: return False
+    if not success:
+        return False
 
     # Offboard
     print("Setting Offboard...")
     success = drone_interface.offboard()
     print(f"Offboard success: {success}")
-    if not success: return False
+    if not success:
+        return False
 
     # Take Off
     print("Taking off...")
@@ -112,60 +149,43 @@ def drone_start(drone_interface: DroneInterface) -> bool:
 
 
 def perform_mission(drone_interface: DroneInterface, planner: PRM3DPlanner) -> bool:
-    """
-    1) 对 viewpoint_poses 进行 TSP
-    2) 依序在 PRM3D 中规划路径
-    3) 调用 follow_path + yaw 控制无人机飞行
-    """
     print("=== Perform mission ===")
 
-    # 取出必经点 + 朝向
     viewpoint_list = planner.viewpoints
     orientation_list = planner.orientations
-    # 移除起点(0,0,TAKE_OFF_HEIGHT)那一项, 如果你只想对后续点TSP
-    # 不移除也可以(看需求)
-    # [0] 是起点的话
-    # viewpoint_list = viewpoint_list[1:]
-    # orientation_list = orientation_list[1:]
 
     # 进行TSP(此处以局部搜索为例)
     print("Calculating TSP with local_search...")
     order, min_dist = solve_tsp_ls(viewpoint_list)
-    # 也可改成 order, min_dist = solve_tsp_dp(viewpoint_list)
-
     print(f"TSP order={order}, TSP dist={min_dist:.2f}")
 
-    # 从(0,0,TAKE_OFF_HEIGHT)开始
-    # 如果[0]就是 (0,0,TAKE_OFF_HEIGHT), 那TSP结果也包含它
+    # 逐段飞到TSP路径里的下一个航点
     current_pose = viewpoint_list[0]
-
-    for idx in order[1:]:  
+    for idx in order[1:]:
         target_pose = viewpoint_list[idx]
         # PRM规划
         path_3d = planner.plan_path(current_pose, target_pose)
         if path_3d is None:
             print("No path found in PRM. Aborting.")
             return False
-        
+
         # 转ROS2 Path
         path_ros2 = generate_path_ros2(path_3d)
-
-        # 期望朝向
         yaw_target = orientation_list[idx]
 
         print(f"Flying from {current_pose} -> {target_pose}, yaw={yaw_target:.2f}...")
         success = drone_interface.follow_path.follow_path_with_yaw(
             path=path_ros2,
             speed=SPEED,
-            angle=yaw_target,   # final yaw
-            frame_id='earth'    # or "map" etc.
+            angle=yaw_target,
+            frame_id='earth'
         )
         if not success:
             print("follow_path failed.")
             return False
 
-        # 更新当前位置
         current_pose = target_pose
+
     return True
 
 
@@ -185,22 +205,22 @@ def drone_end(drone_interface: DroneInterface) -> bool:
 
 # ================== main ==================
 def main():
-    parser = argparse.ArgumentParser(description='Single drone mission with PRM + TSP')
+    parser = argparse.ArgumentParser(description='Single drone mission with PRM + TSP + distance logger')
     parser.add_argument('scenario', type=str, help="Scenario YAML file to execute")
     parser.add_argument('-n', '--namespace', type=str, default='drone0', help='Drone namespace')
     parser.add_argument('-v', '--verbose', action='store_true', default=False, help='Enable verbose output')
     parser.add_argument('-s', '--use_sim_time', action='store_true', default=True, help='Use simulation time')
     args = parser.parse_args()
 
-    # 读取场景
-    scenario_file = args.scenario
-    scenario = read_scenario(scenario_file)
-    scenario["file_path"] = scenario_file
-
     # 初始化
     rclpy.init()
     drone_ns = args.namespace
     print(f"Running 3D mission for drone {drone_ns}")
+
+    # 读取场景
+    scenario_file = args.scenario
+    scenario = read_scenario(scenario_file)
+    scenario["file_path"] = scenario_file
 
     # 提取 viewpoint + orientation
     viewpoint_list = []
@@ -232,28 +252,46 @@ def main():
     print(f"PRM Graph has {len(planner.G.nodes)} nodes, {len(planner.G.edges)} edges.")
 
     # 创建无人机接口
-    uav = DroneInterface(
+    drone_interface = DroneInterface(
         drone_id=drone_ns,
         use_sim_time=args.use_sim_time,
         verbose=args.verbose
     )
 
+    # 创建距离记录节点 (改用 ground_truth/pose + BEST_EFFORT QoS)
+    distance_logger = DistanceLogger(drone_namespace=drone_ns)
+
+    # MultiThreadedExecutor，执行 spin
+    executor = MultiThreadedExecutor()
+    executor.add_node(drone_interface)
+    executor.add_node(distance_logger)
+
+    spin_thread = threading.Thread(target=executor.spin, daemon=True)
+    spin_thread.start()
+
     # 任务流程
-    success = drone_start(uav)
-    try:
-        start_t = time.time()
-        if success:
-            success = perform_mission(uav, planner)
-        total_dur = time.time() - start_t
-        print(f"Mission took {total_dur:.2f} seconds")
-    except KeyboardInterrupt:
-        success = False
-    
-    success2 = drone_end(uav)
-    uav.shutdown()
+    start_time = time.time()
+    success = drone_start(drone_interface)
+    if success:
+        try:
+            success = perform_mission(drone_interface, planner)
+        except KeyboardInterrupt:
+            success = False
+    total_dur = time.time() - start_time
+    print(f"Mission took {total_dur:.2f} seconds")
+
+    # 结束并打印距离
+    success2 = drone_end(drone_interface)
+    final_distance = distance_logger.get_distance()
+    print(f"===> Final flight distance (ground_truth): {final_distance:.2f} meters")
+
+    # 关闭节点
+    drone_interface.shutdown()
+    executor.shutdown()
+    spin_thread.join()
+    distance_logger.destroy_node()
     rclpy.shutdown()
     print("Clean exit")
-
 
 if __name__ == "__main__":
     main()
