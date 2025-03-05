@@ -14,6 +14,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Header
+from rclpy.time import Time
 
 # AeroStack2 Python API
 from as2_python_api.drone_interface import DroneInterface
@@ -32,7 +33,7 @@ SPEED           = 2.0
 LAND_SPEED      = 0.5
 
 # ================== 距离记录节点 ==================
-class DistanceLogger(Node):
+class MetricLogger(Node):
     """
     订阅 /drone0/ground_truth/pose (PoseStamped)
     连续计算无人机飞行距离
@@ -41,6 +42,9 @@ class DistanceLogger(Node):
         super().__init__("distance_logger")
         self.prev_pos = None
         self.total_distance = 0.0
+
+        self._flight_start_time = None
+        self._flight_end_time = None
 
         topic_name = f"/{drone_namespace}/ground_truth/pose"
 
@@ -60,6 +64,7 @@ class DistanceLogger(Node):
         self.get_logger().info(f"DistanceLogger subscribed to: {topic_name}")
 
     def pose_callback(self, msg):
+        
         x = msg.pose.position.x
         y = msg.pose.position.y
         z = msg.pose.position.z
@@ -73,6 +78,18 @@ class DistanceLogger(Node):
     def get_distance(self) -> float:
         """返回当前累计飞行距离"""
         return self.total_distance
+    
+    def start_flight_timer(self):
+        self._flight_start_time = self.get_clock().now()
+    
+    def end_flight_timer(self):
+        self._flight_end_time = self.get_clock().now()
+    
+    def get_flight_duration(self) -> float:
+        if self._flight_start_time is None or self._flight_end_time is None:
+            return 0.0
+        dt = self._flight_end_time - self._flight_start_time
+        return dt.nanoseconds * 1e-9
 
 
 # ================== TSP 求解函数 ==================
@@ -148,16 +165,23 @@ def drone_start(drone_interface: DroneInterface) -> bool:
     return success
 
 
-def perform_mission(drone_interface: DroneInterface, planner: PRM3DPlanner) -> bool:
+def perform_mission(drone_interface: DroneInterface, 
+                    planner: PRM3DPlanner,
+                    metric_logger: MetricLogger) -> bool:
     print("=== Perform mission ===")
 
     viewpoint_list = planner.viewpoints
     orientation_list = planner.orientations
 
     # 进行TSP(此处以局部搜索为例)
+    
     print("Calculating TSP with local_search...")
+    start_time = time.time()
     order, min_dist = solve_tsp_ls(viewpoint_list)
-    print(f"TSP order={order}, TSP dist={min_dist:.2f}")
+    duration = time.time() - start_time
+    print(f"TSP duration={duration:.2f}, TSP dist={min_dist:.2f}")
+
+    metric_logger.start_flight_timer()
 
     # 逐段飞到TSP路径里的下一个航点
     current_pose = viewpoint_list[0]
@@ -173,7 +197,7 @@ def perform_mission(drone_interface: DroneInterface, planner: PRM3DPlanner) -> b
         path_ros2 = generate_path_ros2(path_3d)
         yaw_target = orientation_list[idx]
 
-        print(f"Flying from {current_pose} -> {target_pose}, yaw={yaw_target:.2f}...")
+        print(f"Flying to viewpoint {idx}, yaw={yaw_target:.2f}...")
         success = drone_interface.follow_path.follow_path_with_yaw(
             path=path_ros2,
             speed=SPEED,
@@ -259,37 +283,42 @@ def main():
     )
 
     # 创建距离记录节点 (改用 ground_truth/pose + BEST_EFFORT QoS)
-    distance_logger = DistanceLogger(drone_namespace=drone_ns)
+    metric_logger = MetricLogger(drone_namespace=drone_ns)
 
     # MultiThreadedExecutor，执行 spin
     executor = MultiThreadedExecutor()
     executor.add_node(drone_interface)
-    executor.add_node(distance_logger)
+    executor.add_node(metric_logger)
 
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
 
     # 任务流程
-    start_time = time.time()
+    # start_time = time.time()
     success = drone_start(drone_interface)
     if success:
         try:
-            success = perform_mission(drone_interface, planner)
+            success = perform_mission(drone_interface, planner, metric_logger)
         except KeyboardInterrupt:
             success = False
-    total_dur = time.time() - start_time
-    print(f"Mission took {total_dur:.2f} seconds")
+    # total_dur = time.time() - start_time
+    # print(f"Mission took {total_dur:.2f} seconds")
 
     # 结束并打印距离
     success2 = drone_end(drone_interface)
-    final_distance = distance_logger.get_distance()
-    print(f"===> Final flight distance (ground_truth): {final_distance:.2f} meters")
-
+    # if successfully landed, get the stop_flight_time
+    if success2:
+        metric_logger.end_flight_timer()
+    
+    final_distance = metric_logger.get_distance()
+    final_duration = metric_logger.get_flight_duration()
+    print(f"===> Final flight distance: {final_distance:.2f} meters")
+    print(f"===> Final flight duration: {final_duration:.2f} seconds")
     # 关闭节点
     drone_interface.shutdown()
     executor.shutdown()
     spin_thread.join()
-    distance_logger.destroy_node()
+    metric_logger.destroy_node()
     rclpy.shutdown()
     print("Clean exit")
 

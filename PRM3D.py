@@ -48,8 +48,8 @@ class PRM3DPlanner:
         for _, obs in self.obstacles.items():
             cx, cy, cz = obs["x"], obs["y"], obs["z"]
             dx, dy, dz = obs["w"], obs["d"], obs["h"]
-            box_min = (cx - dx/2 - 0.15, cy - dy/2 - 0.15, cz - dz/2 - 0.15)
-            box_max = (cx + dx/2 + 0.15, cy + dy/2 + 0.15, cz + dz/2 + 0.15)
+            box_min = (cx - dx/2 - 0.35, cy - dy/2 - 0.35, cz - dz/2 - 0.15)
+            box_max = (cx + dx/2 + 0.35, cy + dy/2 + 0.35, cz + dz/2 + 0.15)
             if self.is_point_in_box(pt, box_min, box_max):
                 return True
         return False
@@ -112,8 +112,8 @@ class PRM3DPlanner:
         for _, obs in self.obstacles.items():
             cx, cy, cz = obs["x"], obs["y"], obs["z"]
             dx, dy, dz = obs["w"], obs["d"], obs["h"]
-            box_min = (cx - dx/2 - 0.15, cy - dy/2 - 0.15, cz - dz/2 - 0.15)
-            box_max = (cx + dx/2 + 0.15, cy + dy/2 + 0.15, cz + dz/2 + 0.15)
+            box_min = (cx - dx/2 - 0.35, cy - dy/2 - 0.35, cz - dz/2 - 0.15)
+            box_max = (cx + dx/2 + 0.35, cy + dy/2 + 0.35, cz + dz/2 + 0.15)
             if self.check_segment_box_intersect(p1, p2, box_min, box_max):
                 return False
         return True
@@ -272,8 +272,8 @@ class PRM3DPlanner:
         """
         cx, cy, cz = obs['x'], obs['y'], obs['z']
         dx, dy, dz = obs["w"], obs["d"], obs["h"]
-        x1, x2 = cx - dx/2 - 0.15, cx + dx/2 + 0.15
-        y1, y2 = cy - dy/2 - 0.15, cy + dy/2 + 0.15
+        x1, x2 = cx - dx/2 - 0.35, cx + dx/2 + 0.35
+        y1, y2 = cy - dy/2 - 0.35, cy + dy/2 + 0.35
         z1, z2 = cz - dz/2 - 0.15, cz + dz/2 + 0.15
         
         corners = [
