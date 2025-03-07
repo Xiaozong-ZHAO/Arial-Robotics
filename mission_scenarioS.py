@@ -28,9 +28,9 @@ from PRM3D import PRM3DPlanner
 
 # ================== 常量 & 配置 ==================
 TAKE_OFF_HEIGHT = 1.0
-TAKE_OFF_SPEED  = 2.0
+TAKE_OFF_SPEED  = 3.0
 SPEED           = 2.0
-LAND_SPEED      = 0.5
+LAND_SPEED      = 3.0
 
 # ================== 距离记录节点 ==================
 class MetricLogger(Node):
@@ -174,13 +174,19 @@ def perform_mission(drone_interface: DroneInterface,
     orientation_list = planner.orientations
 
     # 进行TSP(此处以局部搜索为例)
-    
-    print("Calculating TSP with local_search...")
-    start_time = time.time()
-    order, min_dist = solve_tsp_ls(viewpoint_list)
-    duration = time.time() - start_time
-    print(f"TSP duration={duration:.2f}, TSP dist={min_dist:.2f}")
-
+    # if viewpoint_list larger than 10, use local search
+    if len(viewpoint_list) <= 10:
+        print("Calculating TSP with dynamic programming...")
+        start_time = time.time()
+        order, min_dist = solve_tsp_dp(viewpoint_list)
+        duration = time.time() - start_time
+        print(f"TSP duration={duration:.2f}, TSP dist={min_dist:.2f}")
+    else:
+        print("Calculating TSP with local search...")
+        start_time = time.time()
+        order, min_dist = solve_tsp_ls(viewpoint_list)
+        duration = time.time() - start_time
+        print(f"TSP duration={duration:.2f}, TSP dist={min_dist:.2f}")
     metric_logger.start_flight_timer()
 
     # 逐段飞到TSP路径里的下一个航点
